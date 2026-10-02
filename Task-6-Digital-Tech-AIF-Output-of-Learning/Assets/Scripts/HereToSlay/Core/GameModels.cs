@@ -24,6 +24,13 @@ namespace HereToSlay
             def = definition;
         }
 
+        /// <summary>Used by online clients to mirror the host's cards with the host's ids.</summary>
+        public CardInstance(CardDefinition definition, int fixedUid)
+        {
+            uid = fixedUid;
+            def = definition;
+        }
+
         public string Name => def.displayName;
 
         /// <summary>A Hero's class after Masks are applied.</summary>
@@ -56,6 +63,8 @@ namespace HereToSlay
         public int index;
         public string name;
         public bool isHuman;
+        /// <summary>Online games, host side: this human plays on another computer.</summary>
+        public bool isRemote;
         public CardInstance leader;
         public readonly List<CardInstance> hand = new List<CardInstance>();
         public readonly List<CardInstance> party = new List<CardInstance>();
@@ -248,6 +257,8 @@ namespace HereToSlay
         public readonly List<CardInstance> revealed = new List<CardInstance>();
         /// <summary>Main action requests: cards are picked by clicking them on the table.</summary>
         public bool pickOnBoard;
+        /// <summary>Online clients: seconds allowed by the host (negative = use local settings).</summary>
+        public float timeLimit = -1f;
 
         public int selectedIndex = -1;
         public bool Resolved => selectedIndex >= 0;

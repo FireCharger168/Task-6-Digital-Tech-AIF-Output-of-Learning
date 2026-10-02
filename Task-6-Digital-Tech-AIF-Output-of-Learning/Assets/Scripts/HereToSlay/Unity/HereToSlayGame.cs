@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using HereToSlay.Net;
 using HereToSlay.View;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -13,7 +14,7 @@ namespace HereToSlay
     /// and drives the rules engine: human decisions come from clicks and drags, AI decisions from <see cref="AIBrain"/>.
     /// It boots itself in any scene, so pressing Play in SampleScene is enough.
     /// </summary>
-    public sealed class HereToSlayGame : MonoBehaviour
+    public sealed partial class HereToSlayGame : MonoBehaviour
     {
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoBoot()
@@ -132,7 +133,11 @@ namespace HereToSlay
             ui.OnStartGame = StartGame;
             ui.OnPlayAgain = () =>
             {
-                if (ui.LastConfig != null)
+                if (hostSession != null || clientSession != null)
+                {
+                    BackToLobby();
+                }
+                else if (ui.LastConfig != null)
                 {
                     StartGame(ui.LastConfig);
                 }
@@ -145,6 +150,15 @@ namespace HereToSlay
             ui.OnQuitGame = QuitApplication;
             ui.OnOptionClicked = OnOptionClicked;
             ui.OnEndTurnClicked = EndTurnClicked;
+            ui.OnHostRequested = HostRequested;
+            ui.OnJoinRequested = JoinRequested;
+            ui.OnHostOptions = HostOptions;
+            ui.OnHostStart = HostStart;
+            ui.OnLeaveOnline = () =>
+            {
+                CloseOnline();
+                ui.ShowOnlineMenu("");
+            };
             ui.ShowTitle();
         }
 
@@ -195,6 +209,11 @@ namespace HereToSlay
                 }
             };
 
+            if (hostSession != null)
+            {
+                hostSession.BeginGame(engine);
+            }
+
             runner = new EngineRunner(engine.Run());
             waitingOn = null;
             requestNeedsShowing = false;
@@ -202,7 +221,7 @@ namespace HereToSlay
             pressedCard = null;
             dragging = false;
 
-            humans = engine.players.Where(p => p.isHuman).ToList();
+            humans = engine.players.Where(p => p.isHuman && !p.isRemote).ToList();
             viewer = humans.Count > 0 ? humans[0] : engine.players[0];
             viewerConfirmed = humans.Count <= 1;
 
@@ -213,6 +232,7 @@ namespace HereToSlay
 
         private void QuitToTitle()
         {
+            CloseOnline();
             engine = null;
             runner = null;
             waitingOn = null;
@@ -241,6 +261,7 @@ namespace HereToSlay
         private void Update()
         {
             FitCamera();
+            PollNetwork();
 
             if (engine == null)
             {
@@ -253,9 +274,22 @@ namespace HereToSlay
                 ui.TogglePause();
             }
 
-            if (!ui.IsPaused && !gameOverShown)
+            if (IsClient)
             {
+                if (!gameOverShown)
+                {
+                    ClientAdvance();
+                }
+            }
+            else if ((!ui.IsPaused || hostSession != null) && !gameOverShown)
+            {
+                // Online games keep running while the host looks at the pause menu: other people are playing.
                 AdvanceEngine();
+            }
+
+            if (hostSession != null && hostSession.InGame)
+            {
+                hostSession.Poll(waitingOn as ChoiceRequest);
             }
 
             if (humans.Count == 0)
@@ -285,7 +319,7 @@ namespace HereToSlay
                 string reason = winner.slainMonsters.Count >= HereToSlayCardDatabase.MonstersRequiredToWin
                     ? "Three Monsters slain!"
                     : "A Party of all six classes!";
-                ui.ShowGameOver($"{winner.name} wins!\n<size=26>{reason}</size>");
+                ui.ShowGameOver($"{winner.name} wins!\n<size=26>{reason}</size>", hostSession != null || clientSession != null ? "Back to Lobby" : "Play Again");
             }
         }
 
@@ -367,6 +401,12 @@ namespace HereToSlay
         private void OnNewRequest(ChoiceRequest request)
         {
             aiTimer = request.kind == ChoiceKind.MainAction ? GameSettings.AiThinkTime * 1.4f : GameSettings.AiThinkTime;
+
+            if (request.chooser.isRemote)
+            {
+                ui.ShowWaiting($"{request.chooser.name} is choosing...");
+                return;
+            }
 
             if (!request.chooser.isHuman)
             {
@@ -549,7 +589,13 @@ namespace HereToSlay
 
         private static float TimeLimit(ChoiceRequest request)
         {
-            switch (request.kind)
+            // Online clients use the host's clock.
+            return request.timeLimit >= 0f ? request.timeLimit : TimeLimit(request.kind);
+        }
+
+        private static float TimeLimit(ChoiceKind kind)
+        {
+            switch (kind)
             {
                 case ChoiceKind.MainAction:
                     return GameSettings.TurnSeconds;

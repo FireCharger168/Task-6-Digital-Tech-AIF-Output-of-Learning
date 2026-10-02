@@ -20,7 +20,7 @@ namespace HereToSlay.View
     /// the in-game HUD (prompt banner, energy, End Turn, seat plates, dice, log, tooltips) and the
     /// hot-seat "pass the device" confirmation screen.
     /// </summary>
-    public sealed class GameUI : MonoBehaviour
+    public sealed partial class GameUI : MonoBehaviour
     {
         private static readonly Color Gold = new Color(1f, 0.82f, 0.35f);
         private static readonly Color PanelColor = new Color(0.1f, 0.08f, 0.16f, 0.96f);
@@ -153,6 +153,7 @@ namespace HereToSlay.View
             BuildPause();
             BuildPass();
             BuildGameOver();
+            BuildOnline();
         }
 
         private RectTransform NewRect(string name, Transform parent)
@@ -291,10 +292,11 @@ namespace HereToSlay.View
             Text subtitle = NewText("Subtitle", titleScreen.transform, "Build a party of heroes. Slay monsters. Backstab your friends.", 28, new Color(0.95f, 0.9f, 1f), TextAnchor.MiddleCenter, true);
             Place(subtitle.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 150), new Vector2(1400, 50));
 
-            string[] labels = { "New Game", "Settings", "How to Play", "Quit" };
+            string[] labels = { "New Game", "Play Online", "Settings", "How to Play", "Quit" };
             Action[] actions =
             {
                 () => { titleScreen.SetActive(false); createScreen.SetActive(true); },
+                () => ShowOnlineMenu(""),
                 () => OpenSettings(() => titleScreen.SetActive(true)),
                 () => rulesScreen.SetActive(true),
                 () => OnQuitGame?.Invoke()
@@ -302,7 +304,7 @@ namespace HereToSlay.View
             for (int i = 0; i < labels.Length; i++)
             {
                 Button button = NewButton(labels[i], titleScreen.transform, labels[i], 30, i == 0 ? AccentButton : ButtonColor, actions[i]);
-                Place(button.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0, 30 - i * 95), new Vector2(380, 78));
+                Place(button.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0, 50 - i * 88), new Vector2(380, 74));
             }
 
             Text credit = NewText("Credit", titleScreen.transform, "A fan-made digital version of Here to Slay by Unstable Games · Made in Unity with C#", 16, new Color(1, 1, 1, 0.6f));
@@ -325,6 +327,7 @@ namespace HereToSlay.View
             pauseScreen.SetActive(false);
             passScreen.SetActive(false);
             gameOverScreen.SetActive(false);
+            HideOnlineScreens();
         }
 
         // ------------------------------------------------------------------ create game
@@ -715,7 +718,7 @@ namespace HereToSlay.View
             RectTransform box = Box(gameOverScreen.transform, new Vector2(760, 380), null);
             gameOverText = NewText("Text", box, "", 44, Gold, TextAnchor.MiddleCenter, true);
             Place(gameOverText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -120), new Vector2(700, 200));
-            Button again = NewButton("Again", box, "Play Again", 26, AccentButton, () =>
+            Button again = playAgainButton = NewButton("Again", box, "Play Again", 26, AccentButton, () =>
             {
                 gameOverScreen.SetActive(false);
                 OnPlayAgain?.Invoke();
@@ -729,8 +732,11 @@ namespace HereToSlay.View
             Place(menu.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(160, 60), new Vector2(280, 64));
         }
 
-        public void ShowGameOver(string text)
+        private Button playAgainButton;
+
+        public void ShowGameOver(string text, string againLabel = "Play Again")
         {
+            playAgainButton.GetComponentInChildren<Text>().text = againLabel;
             ClearRequest();
             gameOverText.text = text;
             gameOverScreen.SetActive(true);
