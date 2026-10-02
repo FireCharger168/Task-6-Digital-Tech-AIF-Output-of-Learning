@@ -75,6 +75,13 @@ namespace HereToSlay
         /// <summary>Monsters: roll this or lower and suffer the penalty.</summary>
         public int failRoll;
         public MonsterPenalty failPenalty;
+        /// <summary>Monsters: cards you draw after slaying it (e.g. Mega Slime draws 2).</summary>
+        public int slayDrawCards;
+        /// <summary>
+        /// Monsters like Dracos are reversed: rolling LOW (slayRoll or less) slays it,
+        /// rolling HIGH (failRoll or more) triggers the penalty.
+        /// </summary>
+        public bool reversedRoll;
 
         /// <summary>Monster requirements. HeroClass.None means "any Hero".</summary>
         public List<HeroClass> monsterRequirements = new List<HeroClass>();
@@ -102,15 +109,14 @@ namespace HereToSlay
                 return cachedSprite;
             }
 
-            cachedSprite = Resources.Load<Sprite>(spriteResourcePath);
-            if (cachedSprite == null)
+            // Always build the sprite from the texture so every card is exactly 1 world unit wide,
+            // whatever resolution the art was saved at.
+            Texture2D texture = Resources.Load<Texture2D>(spriteResourcePath);
+            if (texture != null)
             {
-                Texture2D texture = Resources.Load<Texture2D>(spriteResourcePath);
-                if (texture != null)
-                {
-                    texture.filterMode = FilterMode.Bilinear;
-                    cachedSprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100f);
-                }
+                texture.filterMode = FilterMode.Trilinear;
+                texture.wrapMode = TextureWrapMode.Clamp;
+                cachedSprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), texture.width);
             }
 
             return cachedSprite;
@@ -142,15 +148,15 @@ namespace HereToSlay
         {
             // ---------------- Party Leaders ----------------
             PartyLeader("theFistOfReason", "The Fist of Reason", HeroClass.Fighter,
-                "Each time you roll for a Challenge card, +2 to your roll."),
+                "Each time you roll to CHALLENGE, +2 to your roll."),
             PartyLeader("theCharismaticSong", "The Charismatic Song", HeroClass.Bard,
                 "Each time you roll to use a Hero card's effect, +1 to your roll."),
             PartyLeader("theProtectingHorn", "The Protecting Horn", HeroClass.Guardian,
-                "Each time you play a Modifier card, it gets an extra +1 or -1 (in the same direction)."),
+                "Each time you play a Modifier card on a roll, +1 or -1 to that roll."),
             PartyLeader("theDivineArrow", "The Divine Arrow", HeroClass.Ranger,
                 "Each time you roll to ATTACK a Monster card, +1 to your roll."),
             PartyLeader("theShadowClaw", "The Shadow Claw", HeroClass.Thief,
-                "Once per turn, you may spend 1 action point to PULL a card from another player's hand."),
+                "Once per turn on your turn, you may spend an action point to PULL a card from another player's hand."),
             PartyLeader("theCloakedSage", "The Cloaked Sage", HeroClass.Wizard,
                 "Each time you play a Magic card, DRAW a card."),
 
@@ -163,18 +169,18 @@ namespace HereToSlay
                 "Each time you roll, +1 to your roll.", Any, Any, Any),
             Monster("bloodwing", "Bloodwing", 9, 6, MonsterPenalty.SacrificeHero,
                 "Each time another player CHALLENGES you, that player must DISCARD a card.", Any, Any),
-            Monster("corruptedSabretooth", "Corrupted Sabretooth", 9, 6, MonsterPenalty.SacrificeHero,
-                "Each time you would DESTROY a Hero card, you may STEAL that Hero card instead.", Any, Any, Any),
+            SlayDraw(Monster("corruptedSabretooth", "Corrupted Sabretooth", 9, 6, MonsterPenalty.SacrificeHero,
+                "Each time you would DESTROY a Hero card, you may STEAL that Hero card instead.", Any, Any, Any), 1),
             Monster("crownedSerpent", "Crowned Serpent", 10, 7, MonsterPenalty.SacrificeHero,
                 "Each time any player (including you) plays a Modifier card, you may DRAW a card.", Any, Any),
-            Monster("dracos", "Dracos", 8, 5, MonsterPenalty.SacrificeHero,
-                "Each time a Hero card in your Party is destroyed, you may DRAW a card.", Any),
+            Reversed(Monster("dracos", "Dracos", 5, 8, MonsterPenalty.SacrificeHero,
+                "Each time a Hero card in your Party is destroyed, you may DRAW a card.", Any)),
             Monster("darkDragonKing", "Dark Dragon King", 8, 4, MonsterPenalty.DiscardTwo,
                 "Each time you roll to use a Hero card's effect, +1 to your roll.", HeroClass.Bard, Any),
             Monster("malamammoth", "Malamammoth", 8, 4, MonsterPenalty.DiscardTwo,
                 "Each time you DRAW an Item card, you may play it immediately.", HeroClass.Ranger, Any),
-            Monster("megaSlime", "Mega Slime", 8, 7, MonsterPenalty.SacrificeHero,
-                "You may spend an extra action point on each of your turns.", Any, Any, Any, Any),
+            SlayDraw(Monster("megaSlime", "Mega Slime", 8, 7, MonsterPenalty.SacrificeHero,
+                "You may spend an extra action point on each of your turns.", Any, Any, Any, Any), 2),
             Monster("orthus", "Orthus", 8, 4, MonsterPenalty.DiscardTwo,
                 "Each time you DRAW a Magic card, you may play it immediately.", HeroClass.Wizard, Any),
             Monster("rexMajor", "Rex Major", 8, 4, MonsterPenalty.DiscardTwo,
@@ -217,7 +223,7 @@ namespace HereToSlay
             Hero("wiseShield", "Wise Shield", HeroClass.Guardian, 6, "+3 to all of your rolls until the end of your turn."),
 
             // ---------------- Rangers ----------------
-            Hero("bullseye", "Bullseye", HeroClass.Ranger, 7, "Look at the top 3 cards of the deck. Add one to your hand, then return the other two to the top of the deck."),
+            Hero("bullseye", "Bullseye", HeroClass.Ranger, 7, "Look at the top 3 cards of the deck. Add one to your hand, then return the other two to the top of the deck in any order."),
             Hero("hook", "Hook", HeroClass.Ranger, 6, "Play an Item card from your hand immediately and DRAW a card."),
             Hero("lookieRookie", "Lookie Rookie", HeroClass.Ranger, 5, "Search the discard pile for an Item card and add it to your hand."),
             Hero("quickDraw", "Quick Draw", HeroClass.Ranger, 8, "DRAW 2 cards. If at least one of those cards is an Item card, you may play one of them immediately."),
@@ -230,7 +236,7 @@ namespace HereToSlay
             Hero("kitNapper", "Kit Napper", HeroClass.Thief, 9, "STEAL a Hero card."),
             Hero("meowzio", "Meowzio", HeroClass.Thief, 10, "Choose a player. STEAL a Hero card from that player's Party and PULL a card from that player's hand."),
             Hero("plunderingPuma", "Plundering Puma", HeroClass.Thief, 6, "PULL 2 cards from another player's hand. That player may DRAW a card."),
-            Hero("shurikitty", "Shurikitty", HeroClass.Thief, 9, "DESTROY a Hero card. If that Hero card had an Item card equipped to it, add that Item card to your hand instead of discarding it."),
+            Hero("shurikitty", "Shurikitty", HeroClass.Thief, 9, "DESTROY a Hero card. If that Hero card had an Item card equipped to it, add that Item card to your hand instead of moving it to the discard pile."),
             Hero("silentShadow", "Silent Shadow", HeroClass.Thief, 8, "Look at another player's hand. Choose a card and add it to your hand."),
             Hero("slipperyPaws", "Slippery Paws", HeroClass.Thief, 6, "PULL 2 cards from another player's hand, then DISCARD one of those cards."),
             Hero("slyPickings", "Sly Pickings", HeroClass.Thief, 6, "PULL a card from another player's hand. If that card is an Item card, you may play it immediately."),
@@ -251,7 +257,7 @@ namespace HereToSlay
             Item("decoyDoll", "Decoy Doll", CardType.Item, 1, "If the equipped Hero card would be sacrificed or destroyed, move Decoy Doll to the discard pile instead."),
             Mask("fighterMask", "Fighter Mask", HeroClass.Fighter),
             Mask("guardianMask", "Guardian Mask", HeroClass.Guardian),
-            Item("particularlyRustyCoin", "Particularly Rusty Coin", CardType.Item, 2, "If you are unsuccessful when rolling to use the equipped Hero card's effect, you may DRAW a card."),
+            Item("particularlyRustyCoin", "Particularly Rusty Coin", CardType.Item, 2, "If you unsuccessfully roll to use the equipped Hero card's effect, DRAW a card."),
             Mask("rangerMask", "Ranger Mask", HeroClass.Ranger),
             Item("reallyBigRing", "Really Big Ring", CardType.Item, 2, "Each time you roll to use the equipped Hero card's effect, +2 to your roll."),
             Mask("thiefMask", "Thief Mask", HeroClass.Thief),
@@ -259,7 +265,7 @@ namespace HereToSlay
 
             Item("curseOfTheSnakeSEyes", "Curse of the Snake's Eyes", CardType.CursedItem, 1, "Each time you roll to use the equipped Hero card's effect, -2 to your roll."),
             Item("sealingKey", "Sealing Key", CardType.CursedItem, 1, "You cannot use the equipped Hero card's effect."),
-            Item("suspiciouslyShinyCoin", "Suspiciously Shiny Coin", CardType.CursedItem, 2, "If you are successful when rolling to use the equipped Hero card's effect, DISCARD a card."),
+            Item("suspiciouslyShinyCoin", "Suspiciously Shiny Coin", CardType.CursedItem, 2, "If you successfully roll to use the equipped Hero card's effect, DISCARD a card."),
 
             // ---------------- Modifiers ----------------
             Modifier("modifierPlus1Minus3", "Modifier +1/-3", 1, -3, 4),
@@ -269,13 +275,13 @@ namespace HereToSlay
             Modifier("modifierMinus4", "Modifier -4", -4, 0, 4),
 
             // ---------------- Magic ----------------
-            Magic("callToTheFallen", "Call to the Fallen", 1, "Search the discard pile for a Hero card and play it immediately."),
+            Magic("callToTheFallen", "Call to the Fallen", 1, "Search the discard pile for a Hero card and add it to your hand."),
             Magic("criticalBoost", "Critical Boost", 3, "DRAW 3 cards and DISCARD a card."),
             Magic("destructiveSpell", "Destructive Spell", 1, "DISCARD a card, then DESTROY a Hero card."),
             Magic("enchantedSpell", "Enchanted Spell", 2, "+2 to all of your rolls until the end of your turn."),
             Magic("entanglingTrap", "Entangling Trap", 2, "DISCARD 2 cards, then STEAL a Hero card."),
             Magic("forcedExchange", "Forced Exchange", 1, "Choose a player. STEAL a Hero card from that player's Party, then move a Hero card from your Party to that player's Party."),
-            Magic("forcefulWinds", "Forceful Winds", 1, "Return every equipped Item card to its owner's hand."),
+            Magic("forcefulWinds", "Forceful Winds", 1, "Return every equipped Item card to its player's hand."),
             Magic("windsOfChange", "Winds of Change", 1, "Return an Item card equipped to any player's Hero card to that player's hand, then DRAW a card."),
 
             // ---------------- Challenge ----------------
@@ -610,7 +616,11 @@ namespace HereToSlay
                     return $"{card.heroClass} Party Leader\n{card.effectText}";
                 case CardType.Monster:
                     string penalty = card.failPenalty == MonsterPenalty.DiscardTwo ? "DISCARD 2 cards" : "SACRIFICE a Hero card";
-                    return $"Monster\nRequirement: {DescribeRequirements(card)}\n{card.slayRoll}+ : SLAY this Monster\n{card.failRoll}- : {penalty}\nOnce slain: {card.slainEffectText}";
+                    string slay = "SLAY this Monster card" + (card.slayDrawCards > 0 ? $" & DRAW {card.slayDrawCards} card{(card.slayDrawCards > 1 ? "s" : "")}" : "");
+                    string rolls = card.reversedRoll
+                        ? $"{card.slayRoll}- : {slay}\n{card.failRoll}+ : {penalty}"
+                        : $"{card.slayRoll}+ : {slay}\n{card.failRoll}- : {penalty}";
+                    return $"Monster\nRequirement: {DescribeRequirements(card)}\n{rolls}\nOnce slain: {card.slainEffectText}";
                 case CardType.Item:
                     return $"Item\n{card.effectText}";
                 case CardType.CursedItem:
@@ -659,6 +669,18 @@ namespace HereToSlay
             return card;
         }
 
+        private static CardDefinition Reversed(CardDefinition monster)
+        {
+            monster.reversedRoll = true;
+            return monster;
+        }
+
+        private static CardDefinition SlayDraw(CardDefinition monster, int cards)
+        {
+            monster.slayDrawCards = cards;
+            return monster;
+        }
+
         private static CardDefinition Mask(string id, string name, HeroClass maskClass)
         {
             CardDefinition card = Item(id, name, CardType.Item, 1, $"The equipped Hero card is considered a {maskClass} instead of its original class.");
@@ -704,7 +726,7 @@ namespace HereToSlay
             card.reactionCard = true;
             card.canBeChallenged = false;
             card.deckCopies = copies;
-            card.effectText = "Play when another player plays a Hero, Item or Magic card. You both roll; if you roll equal or higher, their card is discarded.";
+            card.effectText = "You may play this card when another player attempts to play a Hero, Item, or Magic card. CHALLENGE that card. (Both players roll; if the challenger rolls equal or higher, the card is discarded.)";
             return card;
         }
 

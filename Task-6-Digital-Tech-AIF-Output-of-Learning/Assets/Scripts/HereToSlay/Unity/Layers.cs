@@ -7,8 +7,8 @@ namespace HereToSlay.View
     /// </summary>
     public static class Layers
     {
-        public const string Background = "Background"; // sky, moon, stars
-        public const string Scenery = "Scenery";       // parallax mountains, forest, clouds
+        public const string Background = "Background"; // reserved (plain camera colour behind the table)
+        public const string Scenery = "Scenery";       // reserved
         public const string Table = "Table";           // wooden table, felt and zone mats
         public const string Board = "Board";           // cards in play: monsters, parties, piles
         public const string Hand = "Hand";             // the viewing player's hand

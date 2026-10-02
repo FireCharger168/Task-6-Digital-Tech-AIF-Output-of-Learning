@@ -1,10 +1,10 @@
 fileFormatVersion: 2
-guid: b2f32a4e84f890944acff0da4544085d
+guid: 884e9a05e13d5454ba60002384aba975
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: 3046588678233697789
-    second: mountainsFar_0
+      213: 2530564911472380330
+    second: button_0
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -100,13 +100,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: mountainsFar_0
+      name: button_0
       rect:
         serializedVersion: 2
         x: 0
         y: 0
-        width: 2048
-        height: 404
+        width: 64
+        height: 64
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -115,8 +115,8 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: dfda8d6e248a74a20800000000000000
-      internalID: 3046588678233697789
+      spriteID: aa90165216f5e1320800000000000000
+      internalID: 2530564911472380330
       vertices: []
       indices: 
       edges: []
@@ -135,7 +135,7 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      mountainsFar_0: 3046588678233697789
+      button_0: 2530564911472380330
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

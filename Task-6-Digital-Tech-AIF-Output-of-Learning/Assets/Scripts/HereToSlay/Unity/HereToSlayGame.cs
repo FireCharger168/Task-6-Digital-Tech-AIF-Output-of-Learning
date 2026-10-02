@@ -9,14 +9,12 @@ using UnityEngine.InputSystem;
 namespace HereToSlay
 {
     /// <summary>
-    /// Entry point. Builds the camera, layered scenery, table and UI, then drives the rules engine:
-    /// human decisions come from clicks, AI decisions from <see cref="AIBrain"/>.
+    /// Entry point. Builds the camera, the layered board and the UI, runs the title screen / game creation / settings flow,
+    /// and drives the rules engine: human decisions come from clicks and drags, AI decisions from <see cref="AIBrain"/>.
     /// It boots itself in any scene, so pressing Play in SampleScene is enough.
     /// </summary>
     public sealed class HereToSlayGame : MonoBehaviour
     {
-        private static readonly float[] Speeds = { 1f, 2f, 4f, 0.5f };
-
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoBoot()
         {
@@ -26,43 +24,103 @@ namespace HereToSlay
             }
         }
 
+        private static readonly List<RaycastResult> UiHits = new List<RaycastResult>();
+
+        /// <summary>Raycasts the UI directly (works even when the window is not focused).</summary>
         public static bool PointerOverUI()
         {
-            return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+            return RaycastUI() != null;
         }
 
-        [Tooltip("Seconds an AI waits before answering, at 1x speed.")]
-        public float aiThinkTime = 0.55f;
+        private static GameObject RaycastUI()
+        {
+            if (EventSystem.current == null || Mouse.current == null)
+            {
+                return null;
+            }
+
+            PointerEventData data = new PointerEventData(EventSystem.current) { position = Mouse.current.position.ReadValue() };
+            UiHits.Clear();
+            EventSystem.current.RaycastAll(data, UiHits);
+            return UiHits.Count > 0 ? UiHits[0].gameObject : null;
+        }
+
+        private static GameObject pressedUiButton;
+
+        /// <summary>
+        /// Safety net for UI buttons: if the EventSystem missed a click (it ignores input while the window
+        /// is not focused, e.g. right after alt-tabbing back), deliver it ourselves. Runs in LateUpdate so a
+        /// click the EventSystem did deliver this frame is never repeated.
+        /// </summary>
+        private void LateUpdate()
+        {
+            Mouse mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return;
+            }
+
+            if (mouse.leftButton.wasPressedThisFrame)
+            {
+                GameObject hit = RaycastUI();
+                UnityEngine.UI.Button button = hit != null ? hit.GetComponentInParent<UnityEngine.UI.Button>() : null;
+                pressedUiButton = button != null ? button.gameObject : null;
+            }
+
+            if (mouse.leftButton.wasReleasedThisFrame && pressedUiButton != null)
+            {
+                GameObject pressed = pressedUiButton;
+                pressedUiButton = null;
+                if (GameUI.LastClickFrame == Time.frameCount)
+                {
+                    return;
+                }
+
+                GameObject hit = RaycastUI();
+                UnityEngine.UI.Button button = hit != null ? hit.GetComponentInParent<UnityEngine.UI.Button>() : null;
+                if (button != null && button.gameObject == pressed && button.IsActive() && button.IsInteractable())
+                {
+                    button.onClick.Invoke();
+                }
+            }
+        }
 
         private Camera cam;
-        private SceneryLayers scenery;
         private BoardView board;
         private GameUI ui;
 
         private GameEngine engine;
         private EngineRunner runner;
         private readonly System.Random aiRandom = new System.Random();
+        private readonly BoardFrame frame = new BoardFrame();
 
         private object waitingOn;
         private float pauseTimer;
         private float aiTimer;
-        private int speedIndex;
-
-        private PlayerState viewer;
-        private bool handVisible = true;
+        private bool requestNeedsShowing;
+        private ChoiceRequest timedRequest;
+        private float timerLeft;
+        private PlayerState autoDrawPlayer;
+        private int autoDrawTurn = -1;
         private bool gameOverShown;
-        private readonly HashSet<CardInstance> selectable = new HashSet<CardInstance>();
 
-        private float Speed => Speeds[speedIndex];
+        // hot-seat privacy
+        private List<PlayerState> humans = new List<PlayerState>();
+        private PlayerState viewer;
+        private bool viewerConfirmed;
+
+        // pointer
+        private CardInstance pressedCard;
+        private Vector3 pressWorld;
+        private bool dragging;
 
         private void Awake()
         {
             Application.targetFrameRate = 60;
+            Application.runInBackground = true;
+            GameSettings.Load();
+            GameSettings.Apply();
             SetupCamera();
-
-            scenery = new GameObject("Scenery (parallax layers)").AddComponent<SceneryLayers>();
-            scenery.transform.SetParent(transform, false);
-            scenery.Build(cam);
 
             board = new GameObject("Board").AddComponent<BoardView>();
             board.transform.SetParent(transform, false);
@@ -71,11 +129,23 @@ namespace HereToSlay
             ui = new GameObject("UI").AddComponent<GameUI>();
             ui.transform.SetParent(transform, false);
             ui.Build();
+            ui.OnStartGame = StartGame;
+            ui.OnPlayAgain = () =>
+            {
+                if (ui.LastConfig != null)
+                {
+                    StartGame(ui.LastConfig);
+                }
+                else
+                {
+                    QuitToTitle();
+                }
+            };
+            ui.OnQuitToTitle = QuitToTitle;
+            ui.OnQuitGame = QuitApplication;
             ui.OnOptionClicked = OnOptionClicked;
-            ui.OnSpeedClicked = CycleSpeed;
-            ui.OnRestartClicked = () => ui.ShowMenu(StartGame);
-            ui.ShowMenu(StartGame);
-            ui.SetStatus("Choose who is playing, then press Start.");
+            ui.OnEndTurnClicked = EndTurnClicked;
+            ui.ShowTitle();
         }
 
         private void SetupCamera()
@@ -89,20 +159,37 @@ namespace HereToSlay
             }
 
             cam.orthographic = true;
-            cam.orthographicSize = 5.4f;
             cam.transform.position = new Vector3(0f, 0f, -10f);
-            cam.backgroundColor = new Color(0.07f, 0.06f, 0.15f);
+            cam.backgroundColor = new Color(0.09f, 0.08f, 0.13f);
             cam.clearFlags = CameraClearFlags.SolidColor;
+            FitCamera();
         }
 
-        private void StartGame(List<SeatConfig> seats)
+        private void FitCamera()
         {
-            engine = new GameEngine(seats);
+            // Always show at least 19.2 x 10.8 world units.
+            cam.orthographicSize = Mathf.Max(5.4f, 9.6f / Mathf.Max(0.1f, cam.aspect));
+        }
+
+        private static void QuitApplication()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
+        }
+
+        // ------------------------------------------------------------------ game lifetime
+
+        private void StartGame(GameConfig config)
+        {
+            engine = new GameEngine(config.seats, null, config.randomLeaders, config.randomFirstPlayer);
             engine.OnLog += line => ui.AddLog(line);
             engine.OnRoll += roll => ui.ShowRoll(roll);
             engine.OnReveal += (who, cards, caption) =>
             {
-                if (who == viewer && who.isHuman && handVisible)
+                if (who == viewer && who.isHuman && HandFaceUp())
                 {
                     ui.ShowToast(caption);
                 }
@@ -110,71 +197,111 @@ namespace HereToSlay
 
             runner = new EngineRunner(engine.Run());
             waitingOn = null;
+            requestNeedsShowing = false;
             gameOverShown = false;
-            ui.ClearLog();
-            ui.ClearPrompt();
+            pressedCard = null;
+            dragging = false;
 
-            List<PlayerState> humans = engine.players.Where(p => p.isHuman).ToList();
+            humans = engine.players.Where(p => p.isHuman).ToList();
             viewer = humans.Count > 0 ? humans[0] : engine.players[0];
-            handVisible = humans.Count <= 1 || humans.Count == 0;
-            if (humans.Count > 1)
-            {
-                ui.ShowPassScreen(viewer.name, () => handVisible = true);
-            }
+            viewerConfirmed = humans.Count <= 1;
+
+            board.SetVisible(true);
+            board.SyncEmpty();
+            ui.ShowHud();
         }
 
-        private void CycleSpeed()
+        private void QuitToTitle()
         {
-            speedIndex = (speedIndex + 1) % Speeds.Length;
-            ui.SetSpeedLabel($"Speed {Speed}x");
+            engine = null;
+            runner = null;
+            waitingOn = null;
+            board.SyncEmpty();
+            ui.HideTooltip();
+            ui.ShowTitle();
         }
+
+        private bool HandFaceUp()
+        {
+            if (humans.Count <= 1)
+            {
+                return true;
+            }
+
+            if (!viewerConfirmed || ui.PassScreenOpen)
+            {
+                return false;
+            }
+
+            return engine.Current == viewer || (waitingOn is ChoiceRequest request && request.chooser == viewer);
+        }
+
+        // ------------------------------------------------------------------ frame loop
 
         private void Update()
         {
+            FitCamera();
+
             if (engine == null)
             {
-                board.SyncEmpty(ui.PanelWidthPixels);
-                ui.RenderLabels(board.labels, cam);
+                board.SyncEmpty();
                 return;
             }
 
-            AdvanceEngine();
-            UpdateSelectable();
-            board.Sync(engine, viewer, handVisible, selectable, ui.PanelWidthPixels);
-            ui.RenderLabels(board.labels, cam);
+            if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame && !ui.PassScreenOpen)
+            {
+                ui.TogglePause();
+            }
+
+            if (!ui.IsPaused && !gameOverShown)
+            {
+                AdvanceEngine();
+            }
+
+            if (humans.Count == 0)
+            {
+                viewer = engine.Current;
+            }
+
+            BuildFrame();
+            board.Sync(frame);
+
+            if (requestNeedsShowing && waitingOn is ChoiceRequest pending && !ui.PassScreenOpen)
+            {
+                requestNeedsShowing = false;
+                ui.ShowRequest(pending, board.IsVisibleFaceUp);
+            }
+
+            RenderHud();
             HandlePointer();
-            UpdateStatus();
+            UpdateDecisionTimer();
 
             if (engine.GameOver && !gameOverShown)
             {
                 gameOverShown = true;
                 runner = null;
                 waitingOn = null;
-                ui.ClearPrompt();
-                ui.ShowGameOver($"{engine.winner.name} wins!\n<size=22>{WinReason(engine.winner)}</size>");
+                PlayerState winner = engine.winner;
+                string reason = winner.slainMonsters.Count >= HereToSlayCardDatabase.MonstersRequiredToWin
+                    ? "Three Monsters slain!"
+                    : "A Party of all six classes!";
+                ui.ShowGameOver($"{winner.name} wins!\n<size=26>{reason}</size>");
             }
-        }
-
-        private static string WinReason(PlayerState p)
-        {
-            return p.slainMonsters.Count >= HereToSlayCardDatabase.MonstersRequiredToWin
-                ? "Three Monsters slain."
-                : "A Party of all six classes.";
         }
 
         private void AdvanceEngine()
         {
-            if (runner == null || ui.MenuOpen)
+            if (runner == null)
             {
                 return;
             }
 
-            // Several engine steps can run in one frame; stop as soon as we need to wait for something.
+            float speed = GameSettings.GameSpeed;
             for (int guard = 0; guard < 50; guard++)
             {
                 if (waitingOn is Pause)
                 {
-                    pauseTimer -= Time.deltaTime * Speed;
+                    pauseTimer -= Time.deltaTime * speed;
                     if (pauseTimer > 0f)
                     {
                         return;
@@ -189,7 +316,7 @@ namespace HereToSlay
                     {
                         if (!request.chooser.isHuman)
                         {
-                            aiTimer -= Time.deltaTime * Speed;
+                            aiTimer -= Time.deltaTime * speed;
                             if (aiTimer <= 0f)
                             {
                                 request.Select(AIBrain.Choose(request, aiRandom));
@@ -203,7 +330,7 @@ namespace HereToSlay
                     }
 
                     waitingOn = null;
-                    ui.ClearPrompt();
+                    ui.ClearRequest();
                 }
 
                 object next;
@@ -214,7 +341,7 @@ namespace HereToSlay
                 catch (Exception exception)
                 {
                     Debug.LogException(exception);
-                    ui.AddLog("<color=#ff8080>Engine error: " + exception.Message + "</color>");
+                    ui.AddLog("Engine error: " + exception.Message);
                     runner = null;
                     return;
                 }
@@ -239,37 +366,56 @@ namespace HereToSlay
 
         private void OnNewRequest(ChoiceRequest request)
         {
-            aiTimer = request.kind == ChoiceKind.MainAction ? aiThinkTime * 1.4f : aiThinkTime;
-            int humanCount = engine.players.Count(p => p.isHuman);
+            aiTimer = request.kind == ChoiceKind.MainAction ? GameSettings.AiThinkTime * 1.4f : GameSettings.AiThinkTime;
 
-            if (request.chooser.isHuman)
+            if (!request.chooser.isHuman)
             {
-                if (request.chooser != viewer)
-                {
-                    viewer = request.chooser;
-                    if (humanCount > 1)
-                    {
-                        handVisible = false;
-                        ui.ShowPassScreen(viewer.name, () => handVisible = true);
-                    }
-                }
-
-                ui.ShowRequest(request);
-            }
-            else
-            {
-                if (humanCount == 0)
-                {
-                    viewer = engine.Current;
-                }
-
                 ui.ShowWaiting($"{request.chooser.name} is thinking...");
+                return;
+            }
+
+            if (humans.Count > 1 && (request.chooser != viewer || !viewerConfirmed))
+            {
+                // Hot-seat: hide everything until the right player confirms they have the device.
+                viewer = request.chooser;
+                viewerConfirmed = false;
+                ui.ClearRequest();
+                string reason = request.prompt.Contains("Party Leader")
+                    ? $"{request.chooser.name} chooses a Party Leader"
+                    : request.kind == ChoiceKind.MainAction && engine.Current == request.chooser
+                    ? "Next turn"
+                    : request.kind == ChoiceKind.Challenge || request.kind == ChoiceKind.Modifier
+                        ? $"{request.chooser.name} may respond"
+                        : $"{request.chooser.name} needs to make a choice";
+                ui.ShowPassScreen(request.chooser.name, reason, () =>
+                {
+                    viewerConfirmed = true;
+                    requestNeedsShowing = true;
+                    AnnounceTurn(request);
+                });
+                return;
+            }
+
+            viewer = request.chooser;
+            requestNeedsShowing = true;
+            AnnounceTurn(request);
+        }
+
+        private int announcedTurn = -1;
+
+        private void AnnounceTurn(ChoiceRequest request)
+        {
+            if (request.kind == ChoiceKind.MainAction && engine.Current == request.chooser && announcedTurn != engine.turnNumber)
+            {
+                announcedTurn = engine.turnNumber;
+                ui.ShowToast(humans.Count > 1 ? $"{request.chooser.name}'s turn!" : "Your turn!", 1.4f);
             }
         }
 
         private ChoiceRequest HumanRequest()
         {
-            if (waitingOn is ChoiceRequest request && !request.Resolved && request.chooser.isHuman && request.chooser == viewer && handVisible && !ui.PassScreenOpen)
+            if (waitingOn is ChoiceRequest request && !request.Resolved && request.chooser.isHuman && request.chooser == viewer
+                && viewerConfirmed && !ui.PassScreenOpen && !ui.IsPaused && ui.IsShowing(request))
             {
                 return request;
             }
@@ -277,45 +423,285 @@ namespace HereToSlay
             return null;
         }
 
-        private void UpdateSelectable()
+        private void BuildFrame()
         {
-            selectable.Clear();
+            frame.game = engine;
+            frame.viewer = viewer;
+            frame.handFaceUp = HandFaceUp();
+            frame.hoverZoom = GameSettings.HoverZoom;
+            frame.selectable.Clear();
+            frame.deckSelectable = false;
+
             ChoiceRequest request = HumanRequest();
-            if (request == null)
+            if (request != null && !ui.ModalOpen)
             {
-                return;
+                foreach (ChoiceOption option in request.options)
+                {
+                    if (option.card != null && request.options.Count(o => o.card == option.card) == 1)
+                    {
+                        frame.selectable.Add(option.card);
+                    }
+
+                    if (option.action == "draw")
+                    {
+                        frame.deckSelectable = true;
+                    }
+                }
             }
 
-            foreach (ChoiceOption option in request.options)
+            frame.dragging = dragging ? pressedCard : null;
+            frame.dragWorld = board.PointerWorld();
+        }
+
+        private void RenderHud()
+        {
+            ui.RenderBadges(board.labels, cam);
+            ui.RenderSeats(board.seats, cam);
+
+            PlayerState current = engine.Current;
+            if (current != null)
             {
-                if (option.card != null)
+                ui.SetTurnText(engine.turnNumber == 0 ? "Choosing Party Leaders..." : $"Turn {engine.turnNumber}  ·  <color=#ffd166>{current.name}</color>'s turn");
+            }
+
+            if (viewer != null)
+            {
+                bool myTurn = current == viewer;
+                int ap = myTurn ? viewer.actionPoints : 0;
+                ui.SetEnergy($"{ap}/{viewer.MaxActionPoints()}", board.OrbPosition, cam, myTurn && ap > 0);
+                string leader = viewer.leader != null ? viewer.leader.Name : "no leader yet";
+                string who = humans.Count == 0 ? "Watching" : "You";
+                ui.SetMyPlate($"<b><size=22>{viewer.name}</size></b>  <color=#aaaaaa>({who})</color>\n{leader}\nClasses {viewer.DistinctClassCount()}/6  ·  Slain {viewer.slainMonsters.Count}/3");
+            }
+
+            ChoiceRequest request = HumanRequest();
+            bool canEnd = request != null && request.kind == ChoiceKind.MainAction;
+            ui.SetEndTurn(canEnd, canEnd && request.options.Count(o => o.action != "end") == 0);
+
+            // Tooltip for enlarged board / hand cards (the UI handles its own hovers).
+            if (!PointerOverUI())
+            {
+                if (board.ZoomCard != null && GameSettings.HoverZoom && !dragging)
                 {
-                    selectable.Add(option.card);
+                    ui.ShowTooltip(board.ZoomCard.def, board.ZoomRect, cam);
+                }
+                else
+                {
+                    ui.HideTooltip();
                 }
             }
         }
 
+        /// <summary>
+        /// Every human decision is on a clock (Settings): turn actions, other choices, and Challenge/Modifier reactions.
+        /// The clock starts once the prompt is on screen (after any pass-the-device screen) and stops while paused.
+        /// When it runs out: on your turn the remaining energy is spent drawing cards and the turn ends;
+        /// reactions pass; other choices are made for you by the AI heuristics.
+        /// </summary>
+        private void UpdateDecisionTimer()
+        {
+            ChoiceRequest request = HumanRequest();
+            if (request == null)
+            {
+                // Keep the remaining time while paused / passing the device; forget it once the question is gone.
+                if (!(waitingOn is ChoiceRequest waiting && waiting == timedRequest && !waiting.Resolved))
+                {
+                    timedRequest = null;
+                }
+
+                ui.SetCountdown(0f, 0f);
+                return;
+            }
+
+            // A timed-out turn keeps drawing until the energy is gone, then ends.
+            if (request.kind == ChoiceKind.MainAction && autoDrawPlayer == request.chooser && autoDrawTurn == engine.turnNumber)
+            {
+                int draw = request.options.FindIndex(o => o.action == "draw");
+                int end = request.options.FindIndex(o => o.action == "end");
+                OnOptionClicked(request, draw >= 0 ? draw : end);
+                return;
+            }
+
+            float seconds = TimeLimit(request);
+            if (seconds <= 0f)
+            {
+                ui.SetCountdown(0f, 0f);
+                return;
+            }
+
+            if (timedRequest != request)
+            {
+                timedRequest = request;
+                timerLeft = seconds;
+            }
+
+            timerLeft -= Time.unscaledDeltaTime;
+            ui.SetCountdown(Mathf.Max(0.01f, timerLeft), seconds, TimerLabel(request));
+            if (timerLeft > 0f)
+            {
+                return;
+            }
+
+            timedRequest = null;
+            ui.SetCountdown(0f, 0f);
+            OnOptionClicked(request, TimeoutChoice(request));
+        }
+
+        private static float TimeLimit(ChoiceRequest request)
+        {
+            switch (request.kind)
+            {
+                case ChoiceKind.MainAction:
+                    return GameSettings.TurnSeconds;
+                case ChoiceKind.Challenge:
+                case ChoiceKind.Modifier:
+                    return GameSettings.ReactionSeconds;
+                default:
+                    return GameSettings.ChoiceSeconds;
+            }
+        }
+
+        private static string TimerLabel(ChoiceRequest request)
+        {
+            switch (request.kind)
+            {
+                case ChoiceKind.MainAction:
+                    return "Turn";
+                case ChoiceKind.Challenge:
+                    return "Challenge?";
+                case ChoiceKind.Modifier:
+                    return "Modifier?";
+                default:
+                    return "Choose";
+            }
+        }
+
+        private int TimeoutChoice(ChoiceRequest request)
+        {
+            switch (request.kind)
+            {
+                case ChoiceKind.MainAction:
+                {
+                    ui.ShowToast("Time's up! Drawing cards with your remaining energy.", 2f);
+                    autoDrawPlayer = request.chooser;
+                    autoDrawTurn = engine.turnNumber;
+                    int draw = request.options.FindIndex(o => o.action == "draw");
+                    return draw >= 0 ? draw : request.options.FindIndex(o => o.action == "end");
+                }
+
+                case ChoiceKind.Challenge:
+                case ChoiceKind.Modifier:
+                {
+                    ui.ShowToast(request.kind == ChoiceKind.Challenge ? "Too slow - no Challenge!" : "Too slow - no Modifier.", 1.5f);
+                    int pass = request.options.FindIndex(o => o.card == null);
+                    return pass >= 0 ? pass : request.options.Count - 1;
+                }
+
+                default:
+                    ui.ShowToast("Time's up - a choice was made for you.", 1.5f);
+                    return AIBrain.Choose(request, aiRandom);
+            }
+        }
+
+        // ------------------------------------------------------------------ input
+
         private void HandlePointer()
         {
-            if (board.Hovered != null && board.Hovered.card != null)
-            {
-                ui.ShowPreview(board.Hovered.card.def);
-            }
-
             Mouse mouse = Mouse.current;
-            if (mouse == null || !mouse.leftButton.wasPressedThisFrame || PointerOverUI())
+            if (mouse == null)
             {
                 return;
             }
 
+            Vector3 world = board.PointerWorld();
             ChoiceRequest request = HumanRequest();
-            if (request == null || board.Hovered == null)
+
+            if (mouse.leftButton.wasPressedThisFrame && !PointerOverUI())
+            {
+                pressedCard = null;
+                dragging = false;
+
+                if (request != null && !ui.ModalOpen)
+                {
+                    CardView hovered = board.Hovered;
+                    if (hovered != null && hovered.card != null && frame.selectable.Contains(hovered.card))
+                    {
+                        if (board.HoveredInHand)
+                        {
+                            pressedCard = hovered.card;
+                            pressWorld = world;
+                        }
+                        else
+                        {
+                            SelectCard(request, hovered.card);
+                        }
+
+                        return;
+                    }
+
+                    if (board.HoveringDeck && frame.deckSelectable)
+                    {
+                        int draw = request.options.FindIndex(o => o.action == "draw");
+                        if (draw >= 0)
+                        {
+                            OnOptionClicked(request, draw);
+                        }
+
+                        return;
+                    }
+                }
+
+                if (board.HoveringDiscard && !ui.ModalOpen && (request == null || !frame.selectable.Contains(engine.discardPile.LastOrDefault())))
+                {
+                    ui.ShowDiscardPile(engine.discardPile);
+                }
+            }
+
+            if (pressedCard != null && mouse.leftButton.isPressed)
+            {
+                if (!dragging && (world - pressWorld).magnitude > 0.3f)
+                {
+                    dragging = true;
+                }
+            }
+
+            if (pressedCard != null && mouse.leftButton.wasReleasedThisFrame)
+            {
+                CardInstance card = pressedCard;
+                bool wasDragging = dragging;
+                pressedCard = null;
+                dragging = false;
+
+                if (request == null)
+                {
+                    return;
+                }
+
+                if (!wasDragging || world.y > BoardView.PlayLineY)
+                {
+                    SelectCard(request, card);
+                }
+            }
+        }
+
+        private void SelectCard(ChoiceRequest request, CardInstance card)
+        {
+            int index = request.options.FindIndex(o => o.card == card);
+            if (index >= 0)
+            {
+                OnOptionClicked(request, index);
+            }
+        }
+
+        private void EndTurnClicked()
+        {
+            ChoiceRequest request = HumanRequest();
+            if (request == null || request.kind != ChoiceKind.MainAction)
             {
                 return;
             }
 
-            CardInstance clicked = board.Hovered.card;
-            int index = request.options.FindIndex(o => o.card == clicked);
+            int index = request.options.FindIndex(o => o.action == "end");
             if (index >= 0)
             {
                 OnOptionClicked(request, index);
@@ -330,18 +716,8 @@ namespace HereToSlay
             }
 
             request.Select(index);
-            ui.ClearPrompt();
-        }
-
-        private void UpdateStatus()
-        {
-            PlayerState current = engine.Current;
-            if (current == null)
-            {
-                return;
-            }
-
-            ui.SetStatus($"Turn {engine.turnNumber}: <b>{current.name}</b>{(current.isHuman ? "" : " (AI)")}\nAction points: <b>{current.actionPoints}</b> / {current.MaxActionPoints()}");
+            ui.ClearRequest();
+            ui.HideTooltip();
         }
     }
 }

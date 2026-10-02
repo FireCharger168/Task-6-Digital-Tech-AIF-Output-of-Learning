@@ -284,12 +284,25 @@ namespace HereToSlay
 
         public static float ScoreAttack(GameEngine game, PlayerState p, CardInstance monster)
         {
+            CardDefinition def = monster.def;
             int bonus = game.PassiveBonus(p, RollKind.AttackMonster, null, null);
-            int modifierHelp = p.hand.Where(c => c.def.type == CardType.Modifier).Select(c => Math.Max(c.def.modifierValue, 0)).DefaultIfEmpty(0).Max();
-            float slay = GameEngine.ProbabilityAtLeast(monster.def.slayRoll, bonus + modifierHelp / 2);
-            float fail = GameEngine.ProbabilityAtMost(monster.def.failRoll, bonus);
-            float penalty = monster.def.failPenalty == MonsterPenalty.SacrificeHero ? 5f : 3f;
-            float value = 12f + p.slainMonsters.Count * 4f;
+            float slay;
+            float fail;
+            if (def.reversedRoll)
+            {
+                int modifierHelp = p.hand.Where(c => c.def.type == CardType.Modifier).Select(c => Math.Max(-Math.Min(c.def.modifierValue, c.def.modifierAltValue), 0)).DefaultIfEmpty(0).Max();
+                slay = GameEngine.ProbabilityAtMost(def.slayRoll, bonus - modifierHelp / 2);
+                fail = GameEngine.ProbabilityAtLeast(def.failRoll, bonus);
+            }
+            else
+            {
+                int modifierHelp = p.hand.Where(c => c.def.type == CardType.Modifier).Select(c => Math.Max(c.def.modifierValue, 0)).DefaultIfEmpty(0).Max();
+                slay = GameEngine.ProbabilityAtLeast(def.slayRoll, bonus + modifierHelp / 2);
+                fail = GameEngine.ProbabilityAtMost(def.failRoll, bonus);
+            }
+
+            float penalty = def.failPenalty == MonsterPenalty.SacrificeHero ? 5f : 3f;
+            float value = 12f + p.slainMonsters.Count * 4f + def.slayDrawCards;
             return slay * value - fail * penalty;
         }
 
@@ -344,7 +357,7 @@ namespace HereToSlay
                     return 2f - Math.Abs(value) * 0.05f;
                 }
 
-                if (ctx.kind == RollKind.AttackMonster && ctx.Total <= ctx.failOn && ctx.Total + value > ctx.failOn && value > 0)
+                if (ctx.kind == RollKind.AttackMonster && !ctx.reversed && ctx.Total <= ctx.failOn && ctx.Total + value > ctx.failOn && value > 0)
                 {
                     return 0.8f;
                 }

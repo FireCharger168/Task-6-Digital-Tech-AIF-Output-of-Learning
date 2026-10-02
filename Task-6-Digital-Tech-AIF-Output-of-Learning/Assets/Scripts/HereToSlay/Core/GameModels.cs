@@ -162,6 +162,7 @@ namespace HereToSlay
         // For monster attacks.
         public int slayOn;
         public int failOn;
+        public bool reversed;
         // For challenges: the roll we are trying to beat / not be beaten by.
         public RollContext opposing;
         public bool isChallenger;
@@ -193,7 +194,7 @@ namespace HereToSlay
                 case RollKind.HeroEffect:
                     return total >= target;
                 case RollKind.AttackMonster:
-                    return total >= slayOn;
+                    return reversed ? total <= slayOn : total >= slayOn;
                 case RollKind.Challenge:
                     if (opposing == null)
                     {

@@ -329,16 +329,25 @@ namespace HereToSlay
 
                     Ref<CardInstance> pick = new Ref<CardInstance>();
                     yield return ChooseCard(p, "Bullseye: add one card to your hand", top, c => AIBrain.KeepValue(this, p, c), pick, null, true);
-                    foreach (CardInstance c in top)
+                    if (pick.value != null)
                     {
-                        if (c == pick.value)
-                        {
-                            p.hand.Add(c);
-                        }
-                        else
-                        {
-                            deck.Add(c);
-                        }
+                        top.Remove(pick.value);
+                        p.hand.Add(pick.value);
+                    }
+
+                    // Return the rest in any order: the chosen card goes back on top.
+                    if (top.Count == 2)
+                    {
+                        Ref<CardInstance> onTop = new Ref<CardInstance>();
+                        yield return ChooseCard(p, "Bullseye: which card goes back on TOP of the deck?", top, c => -AIBrain.KeepValue(this, p, c), onTop, null, true);
+                        CardInstance first = onTop.value ?? top[0];
+                        top.Remove(first);
+                        deck.Add(top[0]);
+                        deck.Add(first);
+                    }
+                    else
+                    {
+                        deck.AddRange(top);
                     }
 
                     Log($"{p.name} looks at the top 3 cards and keeps one.");
@@ -570,22 +579,8 @@ namespace HereToSlay
             switch (card.def.id)
             {
                 case "callToTheFallen":
-                {
-                    Ref<CardInstance> pick = new Ref<CardInstance>();
-                    yield return ChooseCard(p, "Call to the Fallen: choose a Hero to play", discardPile.Where(c => c.def.type == CardType.Hero).ToList(),
-                        c => AIBrain.KeepValue(this, p, c), pick, null, true);
-                    if (pick.value == null)
-                    {
-                        Log("There are no fallen Heroes to call.");
-                    }
-                    else
-                    {
-                        discardPile.Remove(pick.value);
-                        Unstage();
-                        yield return PlayCard(p, pick.value);
-                    }
+                    yield return SearchDiscard(p, CardType.Hero, "a Hero card");
                     break;
-                }
 
                 case "criticalBoost":
                     yield return DrawCards(p, 3);

@@ -92,6 +92,12 @@ namespace HereToSlay.View
         public static Sprite Frame => Load(BackgroundFolder + "frame", 100f, new Vector4(20, 20, 20, 20));
         public static Sprite Glow => Load(BackgroundFolder + "glow", 100f, new Vector4(40, 40, 40, 40));
 
+        public static Sprite Button => Load(BackgroundFolder + "button", 100f, new Vector4(20, 20, 20, 20));
+        public static Sprite Circle => Load(BackgroundFolder + "circle", 128f);
+        public static Sprite EnergyOrb => Load(BackgroundFolder + "energyOrb", 100f);
+        public static Sprite EnergyOrbEmpty => Load(BackgroundFolder + "energyOrbEmpty", 100f);
+        public static Sprite CostOrb => Load(BackgroundFolder + "costOrb", 100f);
+
         public static Sprite CardBack => CardFaceById("cardBack000");
 
         public static Sprite CardFace(CardDefinition definition)

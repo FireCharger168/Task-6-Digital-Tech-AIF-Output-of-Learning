@@ -57,8 +57,20 @@ namespace HereToSlay
 
         public readonly List<string> log = new List<string>();
 
-        public GameEngine(IList<SeatConfig> seats, int? seed = null)
+        /// <summary>true: Party Leaders are dealt at random. false: players pick in turn order (a draft, so no duplicates).</summary>
+        public readonly bool randomLeaders;
+        /// <summary>true: a random player goes first. false: seat 1 goes first.</summary>
+        public readonly bool randomFirstPlayer;
+
+        public GameEngine(IList<SeatConfig> seats, int? seed = null, bool randomLeaders = false, bool randomFirstPlayer = true)
         {
+            if (seats == null || seats.Count < 2 || seats.Count > HereToSlayCardDatabase.GetPartyLeaders().Count)
+            {
+                throw new ArgumentException($"Here to Slay needs 2-{HereToSlayCardDatabase.GetPartyLeaders().Count} players.");
+            }
+
+            this.randomLeaders = randomLeaders;
+            this.randomFirstPlayer = randomFirstPlayer;
             rng = seed.HasValue ? new Random(seed.Value) : new Random();
             for (int i = 0; i < seats.Count; i++)
             {
@@ -141,7 +153,7 @@ namespace HereToSlay
             return 1f - ProbabilityAtLeast(target + 1, bonus);
         }
 
-        public int PassiveBonus(PlayerState p, RollKind kind, CardInstance hero, List<string> notes)
+        public int PassiveBonus(PlayerState p, RollKind kind, CardInstance hero, List<string> notes, bool isChallenger = false)
         {
             int bonus = 0;
             void Add(int amount, string why)
@@ -172,7 +184,7 @@ namespace HereToSlay
                     if (p.HasLeader("theDivineArrow")) Add(1, "Divine Arrow");
                     break;
                 case RollKind.Challenge:
-                    if (p.HasLeader("theFistOfReason")) Add(2, "Fist of Reason");
+                    if (isChallenger && p.HasLeader("theFistOfReason")) Add(2, "Fist of Reason");
                     if (p.HasSlain("titanWyvern")) Add(1, "Titan Wyvern");
                     break;
             }
@@ -254,22 +266,40 @@ namespace HereToSlay
             }
 
             Shuffle(leaderPool);
-            Log("Welcome to Here to Slay! Choose your Party Leaders.");
+            currentPlayerIndex = randomFirstPlayer ? rng.Next(players.Count) : 0;
 
-            currentPlayerIndex = rng.Next(players.Count);
-
-            foreach (PlayerState p in new[] { Current }.Concat(OthersInTurnOrder(Current)).ToList())
+            if (randomLeaders)
             {
-                ChoiceRequest pick = new ChoiceRequest(p, ChoiceKind.PickCard, $"{p.name}: choose your Party Leader");
-                foreach (CardInstance leader in leaderPool)
+                Log("Welcome to Here to Slay! Party Leaders are assigned at random.");
+                foreach (PlayerState p in players)
                 {
-                    pick.Add(leader.Name, (float)rng.NextDouble(), leader);
+                    // leaderPool is shuffled; taking from it guarantees every leader is unique.
+                    p.leader = leaderPool[leaderPool.Count - 1];
+                    leaderPool.RemoveAt(leaderPool.Count - 1);
+                    Log($"{p.name} leads with {p.leader.Name} ({p.leader.def.heroClass}).");
                 }
+            }
+            else
+            {
+                Log("Welcome to Here to Slay! Choose your Party Leaders.");
+                foreach (PlayerState p in new[] { Current }.Concat(OthersInTurnOrder(Current)).ToList())
+                {
+                    ChoiceRequest pick = new ChoiceRequest(p, ChoiceKind.PickCard, $"{p.name}: choose your Party Leader");
+                    foreach (CardInstance leader in leaderPool)
+                    {
+                        pick.Add(leader.Name, (float)rng.NextDouble(), leader);
+                    }
 
-                yield return Ask(pick);
-                p.leader = pick.Chosen.card;
-                leaderPool.Remove(p.leader);
-                Log($"{p.name} leads with {p.leader.Name} ({p.leader.def.heroClass}).");
+                    yield return Ask(pick);
+                    p.leader = pick.Chosen.card;
+                    leaderPool.Remove(p.leader);
+                    Log($"{p.name} leads with {p.leader.Name} ({p.leader.def.heroClass}).");
+                }
+            }
+
+            if (players.Select(p => p.leader.def.id).Distinct().Count() != players.Count)
+            {
+                throw new InvalidOperationException("Duplicate Party Leaders were assigned.");
             }
 
             for (int round = 0; round < HereToSlayCardDatabase.StartingHandSize; round++)
@@ -856,7 +886,7 @@ namespace HereToSlay
         {
             ctx.die1 = D6();
             ctx.die2 = D6();
-            ctx.passiveBonus = PassiveBonus(ctx.roller, ctx.kind, ctx.hero, ctx.bonusNotes);
+            ctx.passiveBonus = PassiveBonus(ctx.roller, ctx.kind, ctx.hero, ctx.bonusNotes, ctx.isChallenger);
             activeRoll = ctx;
             OnRoll?.Invoke(ctx);
             yield return Wait(1.0f);
@@ -938,7 +968,8 @@ namespace HereToSlay
 
             if (q.HasLeader("theProtectingHorn"))
             {
-                values = values.Select(v => v + Math.Sign(v)).ToList();
+                // The Protecting Horn: +1 or -1 to that roll, player's choice.
+                values = values.SelectMany(v => new[] { v + 1, v - 1 }).Distinct().ToList();
             }
 
             return values;
@@ -996,34 +1027,40 @@ namespace HereToSlay
         private IEnumerator AttackMonster(PlayerState p, CardInstance monster)
         {
             Log($"{p.name} attacks {monster.Name}!");
+            CardDefinition def = monster.def;
             RollContext ctx = new RollContext
             {
                 roller = p,
                 kind = RollKind.AttackMonster,
                 monster = monster,
-                slayOn = monster.def.slayRoll,
-                failOn = monster.def.failRoll,
-                description = $"{p.name} attacks {monster.Name} (slay {monster.def.slayRoll}+, fail {monster.def.failRoll}-)"
+                slayOn = def.slayRoll,
+                failOn = def.failRoll,
+                reversed = def.reversedRoll,
+                description = def.reversedRoll
+                    ? $"{p.name} attacks {monster.Name} (slay {def.slayRoll}-, fail {def.failRoll}+)"
+                    : $"{p.name} attacks {monster.Name} (slay {def.slayRoll}+, fail {def.failRoll}-)"
             };
             yield return Roll(ctx);
 
-            if (ctx.Total >= monster.def.slayRoll)
+            bool slain = def.reversedRoll ? ctx.Total <= def.slayRoll : ctx.Total >= def.slayRoll;
+            bool failed = def.reversedRoll ? ctx.Total >= def.failRoll : ctx.Total <= def.failRoll;
+
+            if (slain)
             {
                 activeMonsters.Remove(monster);
                 p.slainMonsters.Add(monster);
-                Log($"{p.name} SLAYS {monster.Name}! Bonus: {monster.def.slainEffectText}");
+                Log($"{p.name} SLAYS {monster.Name}! Bonus: {def.slainEffectText}");
                 RefillMonsters();
-                if (monster.def.id == "megaSlime")
-                {
-                    p.actionPoints += 1;
-                }
-
                 yield return Wait(0.8f);
+                if (def.slayDrawCards > 0)
+                {
+                    yield return DrawCards(p, def.slayDrawCards);
+                }
             }
-            else if (ctx.Total <= monster.def.failRoll)
+            else if (failed)
             {
                 Log($"{monster.Name} fights back!");
-                if (monster.def.failPenalty == MonsterPenalty.DiscardTwo)
+                if (def.failPenalty == MonsterPenalty.DiscardTwo)
                 {
                     yield return DiscardCards(p, 2, $"{monster.Name}: discard 2 cards");
                 }

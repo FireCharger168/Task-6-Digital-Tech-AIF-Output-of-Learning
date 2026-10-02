@@ -1,10 +1,10 @@
 fileFormatVersion: 2
-guid: 1839e732c69ad834db3f1d037809da4f
+guid: a372bc9de9127934f973fc395ad9f7ab
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: -8533543425774123357
-    second: forestNear_0
+      213: 3051172368717596587
+    second: energyOrb_0
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -100,13 +100,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: forestNear_0
+      name: energyOrb_0
       rect:
         serializedVersion: 2
         x: 0
         y: 0
-        width: 2048
-        height: 273
+        width: 256
+        height: 256
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -115,8 +115,8 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: 3a60d578773c29980800000000000000
-      internalID: -8533543425774123357
+      spriteID: ba746e18a11f75a20800000000000000
+      internalID: 3051172368717596587
       vertices: []
       indices: 
       edges: []
@@ -135,7 +135,7 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      forestNear_0: -8533543425774123357
+      energyOrb_0: 3051172368717596587
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 
