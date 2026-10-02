@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Threading;
 
 namespace HereToSlay.Net
 {
@@ -64,6 +63,8 @@ namespace HereToSlay.Net
         public string HostName { get; private set; } = "Host";
         public string Code { get; private set; } = "";
         public string Address { get; private set; } = "";
+        /// <summary>Internet code from Unity Relay (empty until it is ready, or if Relay is unavailable).</summary>
+        public string OnlineCode { get; set; } = "";
         public int Port => net.Port;
         public int AiCount { get; private set; }
         public bool RandomLeaders { get; private set; } = true;
@@ -83,6 +84,12 @@ namespace HereToSlay.Net
             IPAddress address = JoinCode.LocalAddress();
             Address = address + ":" + net.Port;
             Code = JoinCode.Encode(address, net.Port);
+        }
+
+        /// <summary>Lets players reach this game another way too (e.g. Unity Relay over the internet).</summary>
+        public void AddTransport(HostTransport transport)
+        {
+            net.AddTransport(transport);
         }
 
         public List<string> PlayerNames()
@@ -416,16 +423,44 @@ namespace HereToSlay.Net
     /// </summary>
     public sealed class ClientSession
     {
-        private readonly NetClient net = new NetClient();
+        private ClientLink link;
+        private bool helloSent;
+        private bool closed;
         private readonly Dictionary<int, CardInstance> cards = new Dictionary<int, CardInstance>();
         private readonly List<CardInstance> hiddenPool = new List<CardInstance>();
         private static CardDefinition hiddenDefinition;
-        private Thread connectThread;
-        private volatile ClientStatus status = ClientStatus.Idle;
         private int pendingId;
+        private string kickReason = "";
 
-        public ClientStatus Status => status;
-        public string Error { get; private set; } = "";
+        public ClientStatus Status
+        {
+            get
+            {
+                if (closed)
+                {
+                    return ClientStatus.Closed;
+                }
+
+                if (link == null)
+                {
+                    return ClientStatus.Idle;
+                }
+
+                switch (link.State)
+                {
+                    case LinkState.Connected:
+                        return helloSent ? ClientStatus.Connected : ClientStatus.Connecting;
+                    case LinkState.Failed:
+                        return ClientStatus.Failed;
+                    case LinkState.Closed:
+                        return ClientStatus.Closed;
+                    default:
+                        return ClientStatus.Connecting;
+                }
+            }
+        }
+
+        public string Error => !string.IsNullOrEmpty(kickReason) ? kickReason : link?.Error ?? "";
         public string PlayerName { get; private set; } = "";
         public string HostName { get; private set; } = "";
         public List<string> LobbyNames { get; } = new List<string>();
@@ -450,37 +485,43 @@ namespace HereToSlay.Net
 
         private static CardDefinition Hidden => hiddenDefinition ?? (hiddenDefinition = HereToSlayCardDatabase.GetCard(NetProtocol.HiddenCardId));
 
-        /// <summary>Starts connecting on a background thread; watch <see cref="Status"/>.</summary>
+        /// <summary>Direct connection (same network / VPN / forwarded port). Watch <see cref="Status"/>.</summary>
         public void ConnectInBackground(IPEndPoint endPoint, string playerName)
         {
+            TcpClientLink tcp = new TcpClientLink();
+            tcp.Connect(endPoint);
+            Begin(tcp, playerName);
+        }
+
+        /// <summary>Uses any link (e.g. Relay); the hello is sent as soon as the link is up.</summary>
+        public void Begin(ClientLink clientLink, string playerName)
+        {
             PlayerName = string.IsNullOrWhiteSpace(playerName) ? "Player" : playerName.Trim();
-            status = ClientStatus.Connecting;
-            connectThread = new Thread(() =>
-            {
-                try
-                {
-                    net.Connect(endPoint);
-                    net.Send(NetProtocol.Hello(PlayerName));
-                    status = ClientStatus.Connected;
-                }
-                catch (Exception e)
-                {
-                    Error = e.Message;
-                    status = ClientStatus.Failed;
-                }
-            }) { IsBackground = true, Name = "HTS connect" };
-            connectThread.Start();
+            link = clientLink;
+            helloSent = false;
+            closed = false;
         }
 
         public void Stop()
         {
-            net.Stop();
-            status = ClientStatus.Closed;
+            closed = true;
+            link?.Stop();
         }
 
         public void Poll()
         {
-            net.Poll(Handle);
+            if (link == null || closed)
+            {
+                return;
+            }
+
+            if (!helloSent && link.State == LinkState.Connected)
+            {
+                helloSent = true;
+                link.Send(NetProtocol.Hello(PlayerName));
+            }
+
+            link.Poll(Handle);
         }
 
         /// <summary>Sends the player's pick for <see cref="Pending"/> once it has been selected locally.</summary>
@@ -491,7 +532,7 @@ namespace HereToSlay.Net
                 return false;
             }
 
-            net.Send(NetProtocol.Answer(pendingId, Pending.selectedIndex));
+            link?.Send(NetProtocol.Answer(pendingId, Pending.selectedIndex));
             Pending = null;
             return true;
         }
@@ -500,9 +541,9 @@ namespace HereToSlay.Net
         {
             if (inbound.payload == null)
             {
-                if (status != ClientStatus.Closed)
+                if (!closed)
                 {
-                    status = ClientStatus.Closed;
+                    closed = true;
                     Disconnected?.Invoke(string.IsNullOrEmpty(Error) ? "Lost connection to the host." : Error);
                 }
 
@@ -517,7 +558,7 @@ namespace HereToSlay.Net
                         HostName = reader.ReadString();
                         break;
                     case MsgType.Kick:
-                        Error = reader.ReadString();
+                        kickReason = reader.ReadString();
                         break;
                     case MsgType.Lobby:
                         ReadLobby(reader);

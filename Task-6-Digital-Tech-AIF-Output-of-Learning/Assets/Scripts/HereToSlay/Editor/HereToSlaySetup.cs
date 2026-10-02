@@ -1,6 +1,7 @@
 using System.Linq;
 using HereToSlay.View;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
@@ -19,6 +20,46 @@ namespace HereToSlay.EditorTools
             EditorApplication.delayCall += EnsureSortingLayers;
             EditorApplication.delayCall += EnsurePlayerSettings;
             EditorApplication.update += PollBuildRequest;
+            CompilationPipeline.compilationStarted += _ => WriteCompileLog("Compiling scripts...", false);
+            CompilationPipeline.assemblyCompilationFinished += LogAssembly;
+            CompilationPipeline.compilationFinished += _ => WriteCompileLog("Compilation finished.", true);
+        }
+
+        private const string RefreshRequestFile = "Builds/refresh.request";
+        private const string CompileLogFile = "Builds/compile_log.txt";
+
+        /// <summary>Writes script compiler errors to Builds/compile_log.txt so problems can be read without the editor.</summary>
+        private static void LogAssembly(string assembly, CompilerMessage[] messages)
+        {
+            int errors = messages.Count(m => m.type == CompilerMessageType.Error);
+            string text = System.IO.Path.GetFileName(assembly) + (errors == 0 ? ": ok" : $": {errors} error(s)");
+            foreach (CompilerMessage message in messages.Where(m => m.type == CompilerMessageType.Error))
+            {
+                text += "\n  " + message.message;
+            }
+
+            WriteCompileLog(text, true);
+        }
+
+        private static void WriteCompileLog(string line, bool append)
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory("Builds");
+                string stamped = System.DateTime.Now.ToString("HH:mm:ss") + " " + line + "\n";
+                if (append)
+                {
+                    System.IO.File.AppendAllText(CompileLogFile, stamped);
+                }
+                else
+                {
+                    System.IO.File.WriteAllText(CompileLogFile, stamped);
+                }
+            }
+            catch (System.Exception)
+            {
+                // logging is best-effort
+            }
         }
 
         private const string BuildRequestFile = "Builds/build.request";
@@ -36,6 +77,18 @@ namespace HereToSlay.EditorTools
             }
 
             nextPoll = EditorApplication.timeSinceStartup + 2.0;
+
+            // Builds/refresh.request: pick up changed scripts and packages without clicking into the editor.
+            if (System.IO.File.Exists(RefreshRequestFile) && !EditorApplication.isCompiling && !EditorApplication.isUpdating
+                && !EditorApplication.isPlayingOrWillChangePlaymode && !BuildPipeline.isBuildingPlayer)
+            {
+                System.IO.File.Delete(RefreshRequestFile);
+                WriteCompileLog("Refresh requested.", false);
+                UnityEditor.PackageManager.Client.Resolve();
+                AssetDatabase.Refresh();
+                return;
+            }
+
             if (!System.IO.File.Exists(BuildRequestFile) || EditorApplication.isCompiling || EditorApplication.isUpdating
                 || EditorApplication.isPlayingOrWillChangePlaymode || BuildPipeline.isBuildingPlayer)
             {

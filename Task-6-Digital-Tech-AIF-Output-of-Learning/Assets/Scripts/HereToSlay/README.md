@@ -16,17 +16,19 @@ spent drawing cards and your turn ends; other timers pass or make a sensible cho
 
 ## Online multiplayer (host + join code)
 Title screen → **Play Online**.
-- **Host Game**: this computer runs the game and shows a 10-character join code (e.g. `60N00-H87K1`, which is the
-  host's network address and port). Add AI bots with **+ / -**, choose the Party Leader mode, then **Start Game**.
-- **Join**: type the host's code (or an address like `192.168.1.20:7777`), then wait in the lobby for the host to start.
+- **Host Game**: this computer runs the game. The lobby shows a **6-character internet code** (e.g. `K7Q2XM`) from
+  Unity Relay, which works for players on any network with no router setup, plus a 10-character same-Wi-Fi code
+  (a direct connection, e.g. `60N00-H87K1`). Add AI bots with **+ / -**, choose the Party Leader mode, then **Start Game**.
+- **Join**: type either code (or an address like `192.168.1.20:7777`) and wait in the lobby for the host to start.
 - Each player only ever receives their own hand; other hands arrive face-down. Timers come from the host's settings.
   If someone disconnects, a bot takes over their seat. After a game everyone returns to the lobby.
-- Same Wi-Fi / LAN works out of the box (allow the game through Windows Firewall). Over the internet the host forwards
-  TCP port 7777 on their router, or everyone uses a VPN such as Tailscale / ZeroTier / Radmin VPN and joins with the
-  host's VPN address (`100.x.y.z:7777`).
-- Code: `Core/Net` — `JoinCode` (code ⇄ address), `NetTransport` (TCP, length-prefixed messages), `NetProtocol`
-  (binary messages and per-player state snapshots), `OnlineSessions` (`HostSession` runs the real engine and forwards
-  each remote player's questions; `ClientSession` mirrors the table into a local `GameEngine` that the normal board draws).
+- Internet play uses Unity Gaming Services (package `com.unity.services.multiplayer`): the project must stay linked to
+  its Unity Cloud project (Edit > Project Settings > Services). Players sign in anonymously; nothing to set up.
+  Relay has a free monthly allowance. If Relay can't be reached the lobby says why, and the same-Wi-Fi code still works.
+- Code: `Core/Net` — `JoinCode` (LAN code ⇄ address), `NetTransport` (connections, direct TCP, pluggable host
+  transports), `NetProtocol` (binary messages and per-player state snapshots), `OnlineSessions` (`HostSession` runs the
+  real engine and forwards each remote player's questions; `ClientSession` mirrors the table into a local `GameEngine`
+  that the normal board draws). `Unity/RelayNet.cs` carries the same messages over Unity Relay + Unity Transport.
 
 ## Build the .exe
 Menu **Here To Slay > Build Windows EXE** → `Builds/HereToSlay/HereToSlay.exe` (the `Builds` folder is git-ignored;

@@ -9,34 +9,81 @@ using System.Threading;
 namespace HereToSlay.Net
 {
     /// <summary>
-    /// One TCP connection carrying length-prefixed messages. A background thread reads; everything else
-    /// (sending and handling) happens on the caller's thread via <see cref="NetPeer.Poll"/>.
+    /// One player's link to the host, whatever carries it (a direct TCP socket on the same network, or the
+    /// Unity Relay service over the internet). Messages are whole byte arrays; order is preserved.
     /// </summary>
-    public sealed class NetConnection
+    public abstract class NetConnection
     {
-        private static int nextId = 1;
+        private static int nextId;
 
-        public readonly int id;
+        public readonly int id = Interlocked.Increment(ref nextId);
         public string name = "";
         public int seatIndex = -1;
 
+        public abstract bool Connected { get; }
+        public abstract string Remote { get; }
+        public abstract bool Send(byte[] payload);
+        public abstract void Close();
+    }
+
+    public readonly struct NetInbound
+    {
+        public readonly NetConnection connection;
+        /// <summary>null means the connection closed.</summary>
+        public readonly byte[] payload;
+
+        public NetInbound(NetConnection connection, byte[] payload)
+        {
+            this.connection = connection;
+            this.payload = payload;
+        }
+    }
+
+    /// <summary>Base for host and client: owns the inbox that transports fill (from any thread).</summary>
+    public abstract class NetPeer
+    {
+        protected readonly ConcurrentQueue<NetInbound> inbox = new ConcurrentQueue<NetInbound>();
+
+        /// <summary>Main-thread transports (e.g. Relay) do their per-frame work here.</summary>
+        protected virtual void Pump()
+        {
+        }
+
+        /// <summary>Hands every queued message to the handler on the calling thread.</summary>
+        public void Poll(Action<NetInbound> handler)
+        {
+            Pump();
+            while (inbox.TryDequeue(out NetInbound message))
+            {
+                handler(message);
+            }
+        }
+
+        public abstract void Stop();
+    }
+
+    // ===================================================================== direct TCP
+
+    /// <summary>A TCP connection carrying length-prefixed messages. A background thread reads.</summary>
+    public sealed class TcpConnection : NetConnection
+    {
         private readonly TcpClient client;
         private readonly NetworkStream stream;
         private readonly object writeLock = new object();
         private readonly ConcurrentQueue<NetInbound> inbox;
         private volatile bool closed;
+        private readonly string remote;
 
-        public bool Connected => !closed && client.Connected;
-        public string Remote { get; }
+        public override bool Connected => !closed && client.Connected;
+        public override string Remote => remote;
 
-        internal NetConnection(TcpClient tcp, ConcurrentQueue<NetInbound> inbox)
+        internal TcpConnection(TcpClient tcp, ConcurrentQueue<NetInbound> inbox)
         {
-            id = Interlocked.Increment(ref nextId);
             client = tcp;
             client.NoDelay = true;
             stream = tcp.GetStream();
             this.inbox = inbox;
-            Remote = tcp.Client.RemoteEndPoint?.ToString() ?? "?";
+            remote = tcp.Client.RemoteEndPoint?.ToString() ?? "?";
             Thread reader = new Thread(ReadLoop) { IsBackground = true, Name = "HTS net reader " + id };
             reader.Start();
         }
@@ -94,7 +141,7 @@ namespace HereToSlay.Net
             return true;
         }
 
-        public bool Send(byte[] payload)
+        public override bool Send(byte[] payload)
         {
             if (closed)
             {
@@ -119,7 +166,7 @@ namespace HereToSlay.Net
             }
         }
 
-        public void Close()
+        public override void Close()
         {
             if (closed)
             {
@@ -138,45 +185,32 @@ namespace HereToSlay.Net
         }
     }
 
-    public readonly struct NetInbound
+    /// <summary>
+    /// An extra way for players to reach the host (e.g. Unity Relay). It reports arrivals, messages and
+    /// departures to the host's inbox and is pumped on the main thread every frame.
+    /// </summary>
+    public abstract class HostTransport
     {
-        public readonly NetConnection connection;
-        /// <summary>null means the connection closed.</summary>
-        public readonly byte[] payload;
+        protected ConcurrentQueue<NetInbound> Inbox { get; private set; }
 
-        public NetInbound(NetConnection connection, byte[] payload)
+        internal void Bind(ConcurrentQueue<NetInbound> inbox)
         {
-            this.connection = connection;
-            this.payload = payload;
-        }
-    }
-
-    /// <summary>Base for host and client: owns the inbox that background threads fill.</summary>
-    public abstract class NetPeer
-    {
-        protected readonly ConcurrentQueue<NetInbound> inbox = new ConcurrentQueue<NetInbound>();
-
-        /// <summary>Hands every queued message to the handler on the calling thread.</summary>
-        public void Poll(Action<NetInbound> handler)
-        {
-            while (inbox.TryDequeue(out NetInbound message))
-            {
-                handler(message);
-            }
+            Inbox = inbox;
         }
 
+        public abstract void Pump();
         public abstract void Stop();
     }
 
-    /// <summary>The host listens for players on a TCP port.</summary>
+    /// <summary>The host listens for players on a TCP port, plus any attached <see cref="HostTransport"/>s.</summary>
     public sealed class NetHost : NetPeer
     {
         private TcpListener listener;
         private volatile bool running;
         private readonly List<NetConnection> connections = new List<NetConnection>();
+        private readonly List<HostTransport> transports = new List<HostTransport>();
 
         public int Port { get; private set; }
-        public IReadOnlyList<NetConnection> Connections => connections;
 
         /// <summary>Starts listening on the first free port from <paramref name="port"/> upwards.</summary>
         public void Start(int port = JoinCode.DefaultPort)
@@ -203,6 +237,20 @@ namespace HereToSlay.Net
             throw new IOException("Could not open a network port for hosting.", last);
         }
 
+        public void AddTransport(HostTransport transport)
+        {
+            transport.Bind(inbox);
+            transports.Add(transport);
+        }
+
+        protected override void Pump()
+        {
+            foreach (HostTransport transport in transports)
+            {
+                transport.Pump();
+            }
+        }
+
         private void AcceptLoop()
         {
             while (running)
@@ -210,7 +258,7 @@ namespace HereToSlay.Net
                 try
                 {
                     TcpClient tcp = listener.AcceptTcpClient();
-                    NetConnection connection = new NetConnection(tcp, inbox);
+                    TcpConnection connection = new TcpConnection(tcp, inbox);
                     lock (connections)
                     {
                         connections.Add(connection);
@@ -236,14 +284,6 @@ namespace HereToSlay.Net
             connection.Close();
         }
 
-        public List<NetConnection> Snapshot()
-        {
-            lock (connections)
-            {
-                return new List<NetConnection>(connections);
-            }
-        }
-
         public override void Stop()
         {
             running = false;
@@ -256,47 +296,105 @@ namespace HereToSlay.Net
                 // ignored
             }
 
-            foreach (NetConnection connection in Snapshot())
+            List<NetConnection> open;
+            lock (connections)
+            {
+                open = new List<NetConnection>(connections);
+                connections.Clear();
+            }
+
+            foreach (NetConnection connection in open)
             {
                 connection.Close();
             }
 
-            lock (connections)
+            // Give transports one last pump so goodbye messages get flushed, then shut them.
+            Pump();
+            foreach (HostTransport transport in transports)
             {
-                connections.Clear();
+                transport.Stop();
             }
+
+            transports.Clear();
         }
     }
 
-    /// <summary>A player's connection to a host.</summary>
-    public sealed class NetClient : NetPeer
+    public enum LinkState
     {
-        public NetConnection Connection { get; private set; }
-        public bool Connected => Connection != null && Connection.Connected;
+        Connecting,
+        Connected,
+        Failed,
+        Closed
+    }
 
-        /// <summary>Connects (blocking up to the timeout). Call from a background thread or accept a short hitch.</summary>
-        public void Connect(IPEndPoint endPoint, int timeoutMs = 5000)
+    /// <summary>A player's link to a host: direct TCP or Relay.</summary>
+    public abstract class ClientLink : NetPeer
+    {
+        private volatile LinkState state = LinkState.Connecting;
+
+        public LinkState State
         {
-            TcpClient tcp = new TcpClient(endPoint.AddressFamily);
-            IAsyncResult result = tcp.BeginConnect(endPoint.Address, endPoint.Port, null, null);
-            if (!result.AsyncWaitHandle.WaitOne(timeoutMs) || !tcp.Connected)
-            {
-                tcp.Close();
-                throw new IOException($"Could not reach a game at {endPoint}.");
-            }
-
-            tcp.EndConnect(result);
-            Connection = new NetConnection(tcp, inbox);
+            get => state;
+            protected set => state = value;
         }
 
-        public bool Send(byte[] payload)
+        public string Error { get; protected set; } = "";
+        public abstract bool Send(byte[] payload);
+
+        /// <summary>Tell the session the link is gone (it sees a null payload).</summary>
+        protected void ReportClosed()
         {
-            return Connection != null && Connection.Send(payload);
+            inbox.Enqueue(new NetInbound(null, null));
+        }
+
+        protected void Receive(byte[] payload)
+        {
+            inbox.Enqueue(new NetInbound(null, payload));
+        }
+    }
+
+    /// <summary>Direct TCP link (same network, VPN, or a forwarded port).</summary>
+    public sealed class TcpClientLink : ClientLink
+    {
+        private TcpConnection connection;
+
+        /// <summary>Connects on a background thread; watch <see cref="ClientLink.State"/>.</summary>
+        public void Connect(IPEndPoint endPoint, int timeoutMs = 5000)
+        {
+            Thread thread = new Thread(() =>
+            {
+                try
+                {
+                    TcpClient tcp = new TcpClient(endPoint.AddressFamily);
+                    IAsyncResult result = tcp.BeginConnect(endPoint.Address, endPoint.Port, null, null);
+                    if (!result.AsyncWaitHandle.WaitOne(timeoutMs) || !tcp.Connected)
+                    {
+                        tcp.Close();
+                        throw new IOException($"Could not reach a game at {endPoint}.");
+                    }
+
+                    tcp.EndConnect(result);
+                    connection = new TcpConnection(tcp, inbox);
+                    State = LinkState.Connected;
+                }
+                catch (Exception e)
+                {
+                    Error = e.Message;
+                    State = LinkState.Failed;
+                }
+            }) { IsBackground = true, Name = "HTS connect" };
+            thread.Start();
+        }
+
+        public override bool Send(byte[] payload)
+        {
+            return connection != null && connection.Send(payload);
         }
 
         public override void Stop()
         {
-            Connection?.Close();
+            connection?.Close();
+            State = LinkState.Closed;
         }
     }
 }

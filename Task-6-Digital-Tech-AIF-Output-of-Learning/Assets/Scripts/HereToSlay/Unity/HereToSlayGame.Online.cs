@@ -18,6 +18,7 @@ namespace HereToSlay
         private bool joinPending;
         private string hostNotice = "";
         private int lastActiveShown = -2;
+        private string relayNote = "";
 
         private bool IsClient => clientSession != null && engine != null && engine == clientSession.Mirror;
 
@@ -39,6 +40,8 @@ namespace HereToSlay
 
             hostSession = session;
             hostNotice = "Waiting for players to join... (or add AI bots and start)";
+            relayNote = "Getting an internet join code...";
+            StartRelayHost(session);
             session.LobbyChanged += RefreshHostLobby;
             session.Notice += message =>
             {
@@ -55,6 +58,35 @@ namespace HereToSlay
             RefreshHostLobby();
         }
 
+        /// <summary>Asks Unity Relay for a 6-character code that works from any network; the LAN code keeps working regardless.</summary>
+        private async void StartRelayHost(HostSession session)
+        {
+            try
+            {
+                Online.RelayHostTransport relay = await Online.RelayHostTransport.CreateAsync(HostSession.MaxPlayers - 1);
+                if (hostSession != session)
+                {
+                    relay.Stop();
+                    return;
+                }
+
+                session.AddTransport(relay);
+                session.OnlineCode = relay.JoinCode;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Here To Slay] Relay unavailable: " + e);
+                if (hostSession != session)
+                {
+                    return;
+                }
+
+                relayNote = "No internet code: " + Online.RelayNet.Explain(e);
+            }
+
+            RefreshHostLobby();
+        }
+
         private void RefreshHostLobby()
         {
             if (hostSession == null || hostSession.InGame)
@@ -62,7 +94,7 @@ namespace HereToSlay
                 return;
             }
 
-            ui.ShowHostLobby(hostSession.Code, hostSession.Address, hostSession.PlayerNames(), hostSession.AiCount,
+            ui.ShowHostLobby(hostSession.OnlineCode, relayNote, hostSession.Code, hostSession.Address, hostSession.PlayerNames(), hostSession.AiCount,
                 hostSession.RandomLeaders, hostSession.CanStart, hostSession.CanStart ? hostNotice : "Add an AI bot or wait for a friend to join (2-6 players).");
         }
 
@@ -93,9 +125,11 @@ namespace HereToSlay
 
         private void JoinRequested(string playerName, string code)
         {
-            if (!JoinCode.TryDecode(code, out System.Net.IPEndPoint endPoint))
+            string relayCode = Online.RelayNet.NormalizeCode(code);
+            System.Net.IPEndPoint endPoint = null;
+            if (relayCode == null && !JoinCode.TryDecode(code, out endPoint))
             {
-                ui.SetOnlineStatus("That join code doesn't look right. It has 10 letters/numbers, like 60N00-H87K1.");
+                ui.SetOnlineStatus("That code doesn't look right. Internet codes have 6 characters (like K7Q2XM); same-Wi-Fi codes have 10.");
                 return;
             }
 
@@ -109,8 +143,18 @@ namespace HereToSlay
             session.Disconnected += ClientDisconnected;
             clientSession = session;
             joinPending = true;
-            ui.SetOnlineStatus($"Connecting to {endPoint}...");
-            session.ConnectInBackground(endPoint, playerName);
+            if (relayCode != null)
+            {
+                ui.SetOnlineStatus($"Joining game {relayCode} over the internet...");
+                Online.RelayClientLink link = new Online.RelayClientLink();
+                link.Connect(relayCode);
+                session.Begin(link, playerName);
+            }
+            else
+            {
+                ui.SetOnlineStatus($"Connecting to {endPoint}...");
+                session.ConnectInBackground(endPoint, playerName);
+            }
         }
 
         private void RefreshClientLobby()
@@ -220,7 +264,7 @@ namespace HereToSlay
                     {
                         joinPending = false;
                         clientSession = null;
-                        ui.SetOnlineStatus("Could not connect: " + session.Error + "\nCheck the code, that the host is in their lobby, and that you are on the same network (or VPN).");
+                        ui.SetOnlineStatus("Could not connect: " + session.Error + "\nCheck the code and that the host is still in their lobby.");
                         return;
                     }
 

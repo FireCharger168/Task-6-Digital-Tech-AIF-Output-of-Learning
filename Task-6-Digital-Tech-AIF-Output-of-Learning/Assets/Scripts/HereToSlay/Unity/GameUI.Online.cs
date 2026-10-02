@@ -53,7 +53,7 @@ namespace HereToSlay.View
             Image hostPanel = NewPanel("Host Panel", box, new Color(0.4f, 0.8f, 0.5f, 0.1f));
             Place(hostPanel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -255), new Vector2(880, 150));
             Text hostInfo = NewText("Host Info", hostPanel.transform,
-                "<b>Host a game</b>\nThis computer runs the game. You get a join code to give your friends.", 21, Color.white, TextAnchor.MiddleLeft);
+                "<b>Host a game</b>\nThis computer runs the game. You get a join code to give your friends - they can be anywhere.", 21, Color.white, TextAnchor.MiddleLeft);
             Place(hostInfo.rectTransform, new Vector2(0f, 0.5f), new Vector2(290, 0), new Vector2(540, 120));
             Button host = NewButton("Host", hostPanel.transform, "Host Game", 26, AccentButton, () =>
             {
@@ -68,7 +68,7 @@ namespace HereToSlay.View
             Place(joinInfo.rectTransform, new Vector2(0f, 1f), new Vector2(290, -32), new Vector2(540, 40));
             joinCodeField = NewInput(joinPanel.transform, PlayerPrefs.GetString(CodePref, ""));
             joinCodeField.characterLimit = 40;
-            joinCodeField.placeholder.GetComponent<Text>().text = "e.g. 60N00-H87K1";
+            joinCodeField.placeholder.GetComponent<Text>().text = "e.g. K7Q2XM";
             Place(joinCodeField.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(290, 48), new Vector2(540, 56));
             Button join = NewButton("Join", joinPanel.transform, "Join", 26, ButtonColor, () =>
             {
@@ -83,9 +83,8 @@ namespace HereToSlay.View
             Place(onlineStatus.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -540), new Vector2(880, 50));
 
             Text help = NewText("Help", box,
-                "Same Wi-Fi / home network: works straight away (allow the game through Windows Firewall when asked).\n" +
-                "Over the internet: the host forwards TCP port 7777 on their router, or everyone joins a free VPN such as " +
-                "Tailscale, ZeroTier or Radmin VPN and the host shares that address (type it as 100.x.y.z:7777).",
+                "The <b>6-character code</b> works from any network over the internet (Unity Relay) - no router setup needed.\n" +
+                "The longer <b>10-character code</b> is a direct connection for players on the same Wi-Fi (allow the game through Windows Firewall if asked).",
                 17, new Color(0.8f, 0.8f, 0.9f));
             Place(help.rectTransform, new Vector2(0.5f, 0f), new Vector2(0, 160), new Vector2(900, 90));
 
@@ -102,11 +101,11 @@ namespace HereToSlay.View
 
             Text codeLabel = NewText("Code Label", hostBox, "Join code", 22, new Color(0.85f, 0.85f, 0.95f));
             Place(codeLabel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -105), new Vector2(600, 30));
-            hostCodeText = NewText("Code", hostBox, "", 72, Gold, TextAnchor.MiddleCenter, true);
+            hostCodeText = NewText("Code", hostBox, "", 80, Gold, TextAnchor.MiddleCenter, true);
             hostCodeText.fontStyle = FontStyle.Bold;
             Place(hostCodeText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -170), new Vector2(900, 90));
             hostAddressText = NewText("Address", hostBox, "", 20, new Color(0.85f, 0.85f, 0.95f));
-            Place(hostAddressText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -232), new Vector2(900, 30));
+            Place(hostAddressText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -238), new Vector2(940, 50));
 
             Image playersPanel = NewPanel("Players", hostBox, new Color(1, 1, 1, 0.06f));
             Place(playersPanel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -385), new Vector2(880, 250));
@@ -182,7 +181,10 @@ namespace HereToSlay.View
             onlineStatus.text = status;
         }
 
-        public void ShowHostLobby(string code, string address, IList<string> names, int bots, bool randomLeaders, bool canStart, string status)
+        /// <param name="onlineCode">Relay code (any network); empty while it is being created or if Relay failed.</param>
+        /// <param name="onlineNote">Shown when there is no Relay code: progress or the reason it failed.</param>
+        public void ShowHostLobby(string onlineCode, string onlineNote, string lanCode, string address, IList<string> names, int bots,
+            bool randomLeaders, bool canStart, string status)
         {
             if (!hostLobbyScreen.activeSelf)
             {
@@ -191,8 +193,17 @@ namespace HereToSlay.View
                 hostLobbyScreen.SetActive(true);
             }
 
-            hostCodeText.text = code;
-            hostAddressText.text = $"Same network: {address}   ·   Tell your friends: Play Online > Join";
+            if (!string.IsNullOrEmpty(onlineCode))
+            {
+                hostCodeText.text = onlineCode;
+                hostAddressText.text = $"Works from any network.   Same Wi-Fi only: <b>{lanCode}</b> ({address})\n<size=16>Friends choose Play Online > Join and type the code.</size>";
+            }
+            else
+            {
+                hostCodeText.text = lanCode;
+                hostAddressText.text = $"<color=#ffbb88>{onlineNote}</color>\n<size=16>This code works for players on the same Wi-Fi ({address}).</size>";
+            }
+
             hostPlayersText.text = PlayerList(names, bots, 0);
             hostBotsText.text = bots.ToString();
             hostLeadersText.text = randomLeaders ? "Randomly assigned" : "Players pick in turn (draft)";
