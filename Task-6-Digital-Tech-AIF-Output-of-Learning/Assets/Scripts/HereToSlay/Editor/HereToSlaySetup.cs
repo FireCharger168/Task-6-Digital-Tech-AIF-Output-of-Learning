@@ -60,6 +60,37 @@ namespace HereToSlay.EditorTools
             {
                 PlayerSettings.productName = "Here to Slay";
             }
+
+            EnsureUnlitMaterial();
+        }
+
+        /// <summary>
+        /// Creates Assets/Resources/HereToSlaySpriteUnlit.mat so the URP unlit sprite shader is always shipped in builds
+        /// (cards are drawn unlit; a shader found only by name would be stripped from the player).
+        /// </summary>
+        public static void EnsureUnlitMaterial()
+        {
+            string path = "Assets/Resources/" + Art.UnlitMaterialResource + ".mat";
+            if (AssetDatabase.LoadAssetAtPath<Material>(path) != null)
+            {
+                return;
+            }
+
+            Shader shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            if (shader == null)
+            {
+                shader = Shader.Find("Sprites/Default");
+            }
+
+            if (shader == null)
+            {
+                return;
+            }
+
+            System.IO.Directory.CreateDirectory("Assets/Resources");
+            AssetDatabase.CreateAsset(new Material(shader) { name = Art.UnlitMaterialResource }, path);
+            AssetDatabase.SaveAssets();
+            Debug.Log("[Here To Slay] Created " + path);
         }
 
         [MenuItem("Here To Slay/Ensure Sorting Layers")]

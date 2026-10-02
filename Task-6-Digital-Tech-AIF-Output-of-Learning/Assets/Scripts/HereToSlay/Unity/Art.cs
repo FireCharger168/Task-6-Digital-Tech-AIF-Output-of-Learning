@@ -14,19 +14,33 @@ namespace HereToSlay.View
         /// Unlit sprite material. URP 2D lights only affect the sorting layers they target, so lit sprites on our
         /// custom layers would render black; unlit sprites always show at full brightness.
         /// </summary>
+        public const string UnlitMaterialResource = "HereToSlaySpriteUnlit";
+
         public static Material SpriteMaterial
         {
             get
             {
                 if (unlitMaterial == null)
                 {
-                    Shader shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
-                    if (shader == null)
+                    // Prefer the material asset in Resources: it guarantees the shader is included in builds.
+                    Material asset = Resources.Load<Material>(UnlitMaterialResource);
+                    if (asset != null)
                     {
-                        shader = Shader.Find("Sprites/Default");
+                        unlitMaterial = asset;
                     }
+                    else
+                    {
+                        Shader shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+                        if (shader == null)
+                        {
+                            shader = Shader.Find("Sprites/Default");
+                        }
 
-                    unlitMaterial = new Material(shader) { name = "HereToSlay Sprite Unlit" };
+                        if (shader != null)
+                        {
+                            unlitMaterial = new Material(shader) { name = "HereToSlay Sprite Unlit" };
+                        }
+                    }
                 }
 
                 return unlitMaterial;
@@ -36,7 +50,10 @@ namespace HereToSlay.View
         public static SpriteRenderer AddRenderer(GameObject go)
         {
             SpriteRenderer renderer = go.AddComponent<SpriteRenderer>();
-            renderer.sharedMaterial = SpriteMaterial;
+            if (SpriteMaterial != null)
+            {
+                renderer.sharedMaterial = SpriteMaterial;
+            }
             return renderer;
         }
 
